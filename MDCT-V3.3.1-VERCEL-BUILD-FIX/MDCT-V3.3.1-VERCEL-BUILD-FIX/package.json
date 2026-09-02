@@ -1,0 +1,23 @@
+{
+  "name": "miran-document-control-tracker",
+  "version": "3.3.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.57.0",
+    "next": "15.5.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "xlsx": "0.18.5",
+    "pst-parser": "0.0.7",
+    "@kenjiuno/msgreader": "1.28.0",
+    "jszip": "3.10.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

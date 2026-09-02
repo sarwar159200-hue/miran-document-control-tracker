@@ -1,0 +1,6 @@
+EXACT VERCEL ROOT DIRECTORY
+
+MDCT-V3.3.1-VERCEL-BUILD-FIX
+
+This folder itself must directly contain package.json, app/, lib/, public/, and supabase/.
+If GitHub shows another folder level inside this folder, use the full path to the folder that directly contains package.json.
