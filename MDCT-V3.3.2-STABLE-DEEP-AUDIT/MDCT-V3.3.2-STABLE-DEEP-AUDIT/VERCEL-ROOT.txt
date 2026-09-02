@@ -1,0 +1,2 @@
+Keep your existing Vercel Root Directory if replacing files in-place.
+If uploaded as a new folder, use: MDCT-V3.3.2-STABLE-DEEP-AUDIT
