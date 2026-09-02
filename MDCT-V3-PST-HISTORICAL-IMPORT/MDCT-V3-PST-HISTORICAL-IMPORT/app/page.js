@@ -1,0 +1,57 @@
+"use client";
+import {useEffect,useMemo,useState} from "react";
+import {sb} from "../lib/supabase-browser";
+import {exportRows} from "../lib/exportExcel";
+import {readPst} from "../lib/pst-import";
+
+const ISSUE={IFR:"Issued for Review",IFA:"Issued for Approval",IFC:"Issued for Construction",IFU:"Issued for Use",IFI:"Issued for Information",IFD:"Issued for Design",IFP:"Issued for Purchase",RLM:"Red-Line Markup / In-House",AB:"As-Built"};
+const CODE={"1":"Approved","2":"Approved with Comments","3":"Rejected","4":"For Information Only"};
+
+export default function Page(){
+ const supabase=sb();
+ const [session,setSession]=useState(null),[loading,setLoading]=useState(true),[profile,setProfile]=useState(null);
+ const [email,setEmail]=useState(""),[password,setPassword]=useState(""),[view,setView]=useState("Dashboard"),[rows,setRows]=useState([]),[contractors,setContractors]=useState([]);
+ const [contractor,setContractor]=useState(""),[discipline,setDiscipline]=useState(""),[year,setYear]=useState(""),[issue,setIssue]=useState(""),[q,setQ]=useState("");
+ const [syncing,setSyncing]=useState(false),[syncMsg,setSyncMsg]=useState(""),[pstProgress,setPstProgress]=useState({parsed:0,processed:0,total:0,relevant:0,updates:0,needs:0});
+
+ useEffect(()=>{supabase.auth.getSession().then(({data})=>{setSession(data.session);setLoading(false)});const {data:s}=supabase.auth.onAuthStateChange((_e,x)=>setSession(x));return()=>s.subscription.unsubscribe()},[]);
+ async function loadData(){if(!session)return;const [p,r,c]=await Promise.all([supabase.from("profiles").select("*").eq("id",session.user.id).single(),supabase.from("document_register_v").select("*").order("submitted_date",{ascending:false}).limit(10000),supabase.from("contractors").select("name").eq("is_active",true).order("name")]);setProfile(p.data);setRows(r.data||[]);setContractors((c.data||[]).map(x=>x.name));}
+ async function importPst(file){
+   if(!file)return; setSyncing(true); setSyncMsg("Reading PST in your browser — the PST file itself is not uploaded or stored."); setPstProgress({parsed:0,processed:0,total:0,relevant:0,updates:0,needs:0});
+   try{
+     const messages=await readPst(file,n=>setPstProgress(x=>({...x,parsed:n})));
+     setPstProgress(x=>({...x,total:messages.length,parsed:messages.length}));
+     let processed=0,relevant=0,updates=0,needs=0;
+     for(let i=0;i<messages.length;i+=50){
+       const batch=messages.slice(i,i+50).map(({raw,...m})=>m);
+       const r=await fetch('/api/pst/import',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`,'content-type':'application/json'},body:JSON.stringify({messages:batch})});
+       const j=await r.json(); if(!r.ok)throw new Error(j.error||'Import failed');
+       processed+=j.scanned||0; relevant+=j.relevant||0; updates+=j.register_updates||0; needs+=j.needs_review||0;
+       setPstProgress({parsed:messages.length,total:messages.length,processed,relevant,updates,needs}); setSyncMsg(`Importing historical emails… ${processed} / ${messages.length}`);
+     }
+     setSyncMsg(`Historical import complete: ${processed} emails scanned, ${relevant} relevant DCC emails, ${updates} register updates, ${needs} need review.`); await loadData();
+   }catch(e){setSyncMsg(`Import stopped: ${e.message}`)}finally{setSyncing(false)}
+ }
+
+ const disciplines=useMemo(()=>[...new Set(rows.map(r=>r.discipline_name).filter(Boolean))].sort(),[rows]);
+ const years=useMemo(()=>[...new Set(rows.map(r=>r.submitted_date?.slice(0,4)).filter(Boolean))].sort().reverse(),[rows]);
+ const f=useMemo(()=>rows.filter(r=>(!contractor||r.contractor_name===contractor)&&(!discipline||r.discipline_name===discipline)&&(!year||r.submitted_date?.startsWith(year))&&(!issue||r.issue_status===issue)&&(!q||[r.document_number,r.document_title,r.submission_transmittal,r.return_transmittal].join(" ").toLowerCase().includes(q.toLowerCase()))),[rows,contractor,discipline,year,issue,q]);
+ const k={total:f.length,review:f.filter(r=>r.status==="UNDER REVIEW").length,over:f.filter(r=>r.status==="OVERDUE").length,ret:f.filter(r=>r.status==="RETURNED").length,c1:f.filter(r=>r.return_code===1).length,c2:f.filter(r=>r.return_code===2).length,c3:f.filter(r=>r.return_code===3).length,c4:f.filter(r=>r.return_code===4).length};
+ const dd=useMemo(()=>{const m={};f.forEach(r=>m[r.discipline_name||"Unassigned"]=(m[r.discipline_name||"Unassigned"]||0)+1);return Object.entries(m).sort((a,b)=>b[1]-a[1])},[f]); const max=Math.max(1,...dd.map(x=>x[1]));
+ const monthly=useMemo(()=>{const m={};f.forEach(r=>{if(r.submitted_date){const x=r.submitted_date.slice(0,7);m[x]=(m[x]||0)+1}});return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0])).slice(-18)},[f]);const maxM=Math.max(1,...monthly.map(x=>x[1]));
+
+ if(loading)return <div className="login">Loading…</div>;
+ if(!session)return <div className="login"><form className="card loginCard" onSubmit={async e=>{e.preventDefault();const {error}=await supabase.auth.signInWithPassword({email,password});if(error)alert(error.message)}}><img src="/miran-energy-logo.png" alt="Miran Energy Ltd" className="loginLogo"/><h2>Miran Document Control Tracker</h2><div className="small">Authorized users only</div><input placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/><input type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)}/><button className="btn" style={{marginTop:10,width:"100%"}}>Sign in</button></form></div>;
+
+ const filters=<div className="filters"><select value={contractor} onChange={e=>setContractor(e.target.value)}><option value="">All Contractors</option>{contractors.map(x=><option key={x}>{x}</option>)}</select><select value={discipline} onChange={e=>setDiscipline(e.target.value)}><option value="">All Disciplines</option>{disciplines.map(x=><option key={x}>{x}</option>)}</select><select value={year} onChange={e=>setYear(e.target.value)}><option value="">All Years</option>{years.map(x=><option key={x}>{x}</option>)}</select><select value={issue} onChange={e=>setIssue(e.target.value)}><option value="">All Issue Statuses</option>{Object.entries(ISSUE).map(([kk,v])=><option value={kk} key={kk}>{kk} — {v}</option>)}</select></div>;
+ const table=<div className="panel"><div className="filters"><input placeholder="Search…" value={q} onChange={e=>setQ(e.target.value)}/><button className="btn" onClick={()=>exportRows(f)}>Export Excel</button></div><div className="tablewrap"><table><thead><tr><th>Contractor</th><th>Document Number</th><th>Title</th><th>Facility</th><th>TSS</th><th>Discipline</th><th>Doc Type</th><th>Rev</th><th>Issue Status</th><th>Submission</th><th>Submitted</th><th>Due</th><th>Return</th><th>Code</th><th>Return Status</th><th>Review Status</th><th>Email</th></tr></thead><tbody>{f.map(r=><tr key={r.revision_id}><td>{r.contractor_name}</td><td><b>{r.document_number}</b></td><td>{r.document_title}</td><td>{r.facility_code}</td><td>{r.train_system_code}</td><td>{r.discipline_code} — {r.discipline_name}</td><td>{r.document_type_code}</td><td>{r.revision}</td><td>{r.issue_status}</td><td>{r.submission_transmittal}</td><td>{r.submitted_date}</td><td>{r.due_date}</td><td>{r.return_transmittal}</td><td>{r.return_code?`Code-${r.return_code}`:""}</td><td>{r.return_status}</td><td><span className={`badge ${r.status==="OVERDUE"?"bad":r.status==="RETURNED"?"good":"warn"}`}>{r.status}</span></td><td>{r.email_web_link?<a href={r.email_web_link} target="_blank">Open Email</a>:""}</td></tr>)}</tbody></table></div></div>;
+ const nav=["Dashboard","Document Register","Historical Import","Numbering Rules","Revision Workflow"];
+ return <div className="shell"><aside className="side"><b>MIRAN ENERGY</b>{nav.map(n=><button className={view===n?"active":""} onClick={()=>setView(n)} key={n}>{n}</button>)}<button onClick={()=>supabase.auth.signOut()}>Logout</button></aside><main className="main"><div className="top"><div><h2>{view}</h2><div className="small">Aligned to Miran Document Numbering Procedure</div></div><div className="small">{profile?.email} · {profile?.role}</div></div>
+ {view!=="Historical Import"&&filters}
+ {view==="Dashboard"&&<><div className="kpis kpis8">{[["TOTAL",k.total],["UNDER REVIEW",k.review],["OVERDUE",k.over],["RETURNED",k.ret],["CODE-1",k.c1],["CODE-2",k.c2],["CODE-3",k.c3],["CODE-4",k.c4]].map(x=><div className="kpi" key={x[0]}><div className="small">{x[0]}</div><b>{x[1]}</b></div>)}</div><div className="grid2"><div className="panel"><b>Submissions by Discipline</b>{dd.map(([n,c])=><div className="bar" key={n}><span>{n}</span><div className="track"><div className="fill" style={{width:`${c/max*100}%`}}/></div><b>{c}</b></div>)}</div><div className="panel"><b>Submissions by Month</b>{monthly.map(([n,c])=><div className="bar" key={n}><span>{n}</span><div className="track"><div className="fill" style={{width:`${c/maxM*100}%`}}/></div><b>{c}</b></div>)}</div></div>{table}</>}
+ {view==="Document Register"&&table}
+ {view==="Historical Import"&&<div className="panel syncPanel"><div className="syncHead"><div><h3>Historical Outlook PST Import</h3><div className="small">Select the PST you exported from Classic Outlook. The PST stays in your browser; MDCT sends only extracted metadata to Supabase in small batches.</div></div><span className="badge good">NO MICROSOFT ADMIN REQUIRED</span></div><div className="uploadBox"><input type="file" accept=".pst" disabled={syncing} onChange={e=>importPst(e.target.files?.[0])}/><p><b>Recommended:</b> use the PST containing your MDCT Historical folder. Do not close this page while processing.</p></div><div className="syncGrid"><div><div className="small">Emails Detected</div><b>{pstProgress.total||pstProgress.parsed}</b></div><div><div className="small">Processed</div><b>{pstProgress.processed}</b></div><div><div className="small">Relevant DCC</div><b>{pstProgress.relevant}</b></div><div><div className="small">Register Updates</div><b>{pstProgress.updates}</b></div><div><div className="small">Needs Review</div><b>{pstProgress.needs}</b></div></div>{syncMsg&&<div className="notice">{syncMsg}</div>}<div className="panel inner"><b>What MDCT analyzes automatically</b><p>Sender, subject, received date, forwarded email text, Miran document numbers, transmittals, revisions, IFR / IFA / IFC / IFU / IFI / IFD / IFP, Code-1 to Code-4, contractor references and duplicate message identifiers. The original PST, attachments and full email bodies are not stored in Supabase.</p></div></div>}
+ {view==="Numbering Rules"&&<div className="grid2"><div className="panel"><h3>Engineering</h3><p><b>MR-FAC-TSS-XX-XXX-0000</b></p><p>MR = Project Code</p><p>FAC = EPF / SRU / BPP / WP2</p><p>TSS = 1-digit Train + 2-digit System</p><p>XX = Discipline</p><p>XXX = Document Type</p><p>0000 = Sequence</p></div><div className="panel"><h3>Vendor</h3><p><b>MR-FAC-TSS-EQ-XX-XXX-0000</b></p><p>Adds Equipment Code before Discipline.</p></div></div>}
+ {view==="Revision Workflow"&&<div className="grid2"><div className="panel"><h3>Revision Families</h3><p><b>A</b> → IFR</p><p><b>B,C,D…</b> → IFA / reissue logic</p><p><b>0,1,2…</b> → IFC / IFU / IFI / IFD / IFP</p><p><b>0.1,1.1…</b> → RLM</p><p><b>AB1,AB2…</b> → AB</p></div><div className="panel"><h3>Return Codes</h3>{Object.entries(CODE).map(([kk,v])=><p key={kk}><b>Code-{kk}</b> — {v}</p>)}</div></div>}
+ </main></div>;
+}
